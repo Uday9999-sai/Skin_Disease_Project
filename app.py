@@ -134,7 +134,7 @@ def detect():
             print("🔥 Generating GradCAM...")
             gradcam_output = os.path.join("static/uploads", "gradcam_" + filename)
 
-            generate_resnet50_gradcam(img_path, resnet_model, gradcam_output)
+            #generate_resnet50_gradcam(img_path, resnet_model, gradcam_output)
 
             if not os.path.exists(gradcam_output):
                 print("❌ GradCAM not generated!")
