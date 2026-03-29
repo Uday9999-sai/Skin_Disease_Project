@@ -22,51 +22,42 @@ def generate_mobilenetv3_gradcam(img_path, model, output_path):
     lab = cv2.cvtColor(original_img, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
     l = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(l)
-    lab = cv2.merge((l, a, b))
-    original_img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    original_img = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
 
     # -------------------------------------------------
-    # 3. Preprocess
+    # 3. Preprocess (OPTIMIZED)
     # -------------------------------------------------
-    img = cv2.resize(original_img, (224, 224))
-    img = preprocess_input(img.astype("float32"))
-    img_array = np.expand_dims(img, axis=0)
+    img_resized = cv2.resize(original_img, (224, 224))
+    img_array = preprocess_input(img_resized.astype(np.float32))[None, ...]
 
     # -------------------------------------------------
-    # 4. 🔥 AUTO LAYER SELECTION (FIX FOR RENDER)
+    # 4. Auto layer selection (same logic)
     # -------------------------------------------------
     layers = []
-
     for layer in reversed(model.layers):
         if "project" in layer.name:
             layers.append(layer.name)
         if len(layers) == 3:
             break
+    layers = layers[::-1]
 
-    layers = layers[::-1]  # maintain order
-
-    print("Using GradCAM layers:", layers)
-
+    # -------------------------------------------------
+    # 5. Grad-CAM (OPTIMIZED MODEL CREATION)
+    # -------------------------------------------------
     heatmaps = []
     target_size = (224, 224)
 
-    # -------------------------------------------------
-    # 5. Grad-CAM per layer
-    # -------------------------------------------------
     for layer_name in layers:
 
+        # reuse model input (slightly faster)
         grad_model = Model(
-            inputs=model.input,
-            outputs=[
-                model.get_layer(layer_name).output,
-                model.output
-            ]
+            model.input,
+            [model.get_layer(layer_name).output, model.output]
         )
 
         with tf.GradientTape() as tape:
-            conv_outputs, predictions = grad_model(img_array)
-            pred_index = tf.argmax(predictions[0])
-            loss = predictions[:, pred_index]
+            conv_outputs, predictions = grad_model(img_array, training=False)
+            loss = predictions[:, tf.argmax(predictions[0])]
 
         grads = tape.gradient(loss, conv_outputs)
         pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
@@ -75,45 +66,43 @@ def generate_mobilenetv3_gradcam(img_path, model, output_path):
 
         heatmap = tf.reduce_sum(conv_outputs * pooled_grads, axis=-1)
 
-        # Normalize
-        heatmap = tf.nn.relu(heatmap)
-        heatmap /= tf.reduce_max(heatmap) + 1e-8
+        # Normalize (SAFE + FAST)
+        heatmap = tf.maximum(heatmap, 0)
+        heatmap /= (tf.reduce_max(heatmap) + 1e-8)
+
+        # Convert early to numpy
         heatmap = heatmap.numpy()
 
-        # Resize
+        # Resize once here
         heatmap = cv2.resize(heatmap, target_size)
 
         heatmaps.append(heatmap)
 
     # -------------------------------------------------
-    # 6. Combine heatmaps
+    # 6. Combine (same logic)
     # -------------------------------------------------
-    heatmap = np.max(np.array(heatmaps), axis=0)
+    heatmap = np.max(np.stack(heatmaps, axis=0), axis=0)
 
     # -------------------------------------------------
-    # 7. Remove noise
+    # 7. Noise removal (same logic, faster ops)
     # -------------------------------------------------
-    heatmap[heatmap < 0.25] = 0
+    heatmap = np.where(heatmap < 0.25, 0, heatmap)
     heatmap = cv2.GaussianBlur(heatmap, (5, 5), 0)
     heatmap = np.power(heatmap, 0.9)
 
     # -------------------------------------------------
-    # 8. Resize to original
+    # 8. Resize once
     # -------------------------------------------------
-    heatmap = cv2.resize(
-        heatmap,
-        (original_img.shape[1], original_img.shape[0])
-    )
+    h, w = original_img.shape[:2]
+    heatmap = cv2.resize(heatmap, (w, h))
 
     # -------------------------------------------------
-    # 9. Lesion mask
+    # 9. Mask (optimized)
     # -------------------------------------------------
     gray = cv2.cvtColor(original_img, cv2.COLOR_BGR2GRAY)
 
-    _, mask = cv2.threshold(
-        gray, 0, 255,
-        cv2.THRESH_BINARY + cv2.THRESH_OTSU
-    )
+    _, mask = cv2.threshold(gray, 0, 255,
+                            cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     mask = cv2.bitwise_not(mask)
 
@@ -122,19 +111,18 @@ def generate_mobilenetv3_gradcam(img_path, model, output_path):
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
     mask = cv2.GaussianBlur(mask, (11, 11), 0)
 
-    mask = mask / 255.0
+    mask = mask.astype(np.float32) / 255.0
 
-    heatmap = heatmap * mask
+    heatmap *= mask
 
     # -------------------------------------------------
-    # 10. Fill internal gaps
+    # 10. Gap filling (same logic)
     # -------------------------------------------------
-    heatmap = heatmap / (np.max(heatmap) + 1e-8)
+    heatmap /= (np.max(heatmap) + 1e-8)
 
-    heatmap[mask > 0.5] = np.maximum(
-        heatmap[mask > 0.5],
-        0.3 * mask[mask > 0.5]
-    )
+    heatmap = np.where(mask > 0.5,
+                       np.maximum(heatmap, 0.3 * mask),
+                       heatmap)
 
     heatmap = cv2.GaussianBlur(heatmap, (21, 21), 0)
 
@@ -150,7 +138,7 @@ def generate_mobilenetv3_gradcam(img_path, model, output_path):
     result = cv2.addWeighted(original_img, 0.7, heatmap_color, 0.3, 0)
 
     # -------------------------------------------------
-    # 13. Save output
+    # 13. Save
     # -------------------------------------------------
     cv2.imwrite(output_path, result)
 
