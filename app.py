@@ -3,39 +3,35 @@ import numpy as np
 import cv2
 import warnings
 import logging
-from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
-)
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from datetime import datetime
-from flask import send_file
+import threading
+import time
+
+from flask import Flask, render_template, request, url_for, send_file
+from werkzeug.utils import secure_filename
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-
 warnings.filterwarnings("ignore")
 logging.getLogger("tensorflow").setLevel(logging.ERROR)
-logging.getLogger("absl").setLevel(logging.ERROR)
 
 import tensorflow as tf
 tf.get_logger().setLevel('ERROR')
 
-
 tf.config.threading.set_intra_op_parallelism_threads(1)
 tf.config.threading.set_inter_op_parallelism_threads(1)
-# Disable GPU for stable inference
+
 try:
     tf.config.set_visible_devices([], 'GPU')
 except:
     pass
 
-from flask import Flask, render_template, request, url_for
-from werkzeug.utils import secure_filename
 from treatment import get_treatment_recommendation
-from predictions import predict_skin_disease
+from predictions import predict_skin_disease, get_model
 from gradcam import generate_mobilenetv3_gradcam
-from predictions import get_model
+
+# ✅ LOAD MODEL ONCE (IMPORTANT FIX)
+print("🚀 Loading model once...")
+model = get_model()
+print("✅ Model loaded")
 
 class_names = {
     0: "Actinic Keratosis",
@@ -47,15 +43,11 @@ class_names = {
 }
 
 def validate_image(img_path):
-
     img = cv2.imread(img_path)
-
     if img is None:
         return False, "Invalid image file."
-
     if np.std(img) < 15:
         return False, "Image quality too low."
-
     return True, ""
 
 app = Flask(__name__)
@@ -63,6 +55,18 @@ app = Flask(__name__)
 UPLOAD_FOLDER = "static/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+
+latest_report_data = None
+
+
+# 🔥 BACKGROUND GRADCAM
+def run_gradcam(img_path, output_path):
+    try:
+        generate_mobilenetv3_gradcam(img_path, model, output_path)
+        print("✅ GradCAM done")
+    except Exception as e:
+        print("🚨 GradCAM ERROR:", str(e))
+
 
 @app.route('/')
 def home():
@@ -76,31 +80,18 @@ def detect():
 
     try:
         if request.method == 'POST':
-            print("📩 POST request received")
 
-            if 'file' not in request.files:
-                print("❌ No file in request")
+            file = request.files.get('file')
+            if not file or file.filename == '':
                 return "No file uploaded"
 
-            file = request.files['file']
-            print("📂 File received:", file.filename)
-
-            if file.filename == '':
-                print("❌ Empty filename")
-                return "No file selected"
-
             filename = secure_filename(file.filename)
-
             img_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             file.save(img_path)
-            print("✅ File saved:", img_path)
 
-            # ---------------- VALIDATION ----------------
-            print("🔍 Validating image...")
+            # -------- VALIDATION --------
             valid, message = validate_image(img_path)
-
             if not valid:
-                print("❌ Validation failed:", message)
                 return render_template(
                     'result.html',
                     uploaded_image=url_for('static', filename='uploads/' + filename),
@@ -110,15 +101,10 @@ def detect():
                     treatment=message
                 )
 
-            print("✅ Validation passed")
-
-            # ---------------- PREDICTION ----------------
-            print("🧠 Running prediction...")
+            # -------- PREDICTION --------
             pred_class, confidence = predict_skin_disease(img_path)
-            print(f"📊 Prediction done: class={pred_class}, conf={confidence}")
 
             if confidence < 60:
-                print("⚠️ Low confidence")
                 return render_template(
                     'result.html',
                     uploaded_image=url_for('static', filename='uploads/' + filename),
@@ -129,28 +115,31 @@ def detect():
                 )
 
             disease_name = class_names.get(pred_class, "Unknown")
-            print("🧾 Disease:", disease_name)
-
             treatment_details = get_treatment_recommendation(disease_name)
-            print("💊 Treatment fetched")
 
-            # ---------------- GRADCAM ----------------
-            print("🔥 Generating GradCAM...")
+            # -------- GRADCAM ASYNC --------
+            gradcam_filename = "gradcam_" + filename
+            gradcam_output = os.path.join("static/uploads", gradcam_filename)
 
-            model = get_model()   # 🔥 IMPORTANT
+            thread = threading.Thread(
+                target=run_gradcam,
+                args=(img_path, gradcam_output)
+            )
+            thread.start()
 
-            gradcam_output = os.path.join("static/uploads", "gradcam_" + filename)
+            # 🔥 WAIT SMALL TIME (NO NEW ROUTE)
+            wait_time = 0
+            while not os.path.exists(gradcam_output) and wait_time < 8:
+                time.sleep(1)
+                wait_time += 1
 
-            generate_mobilenetv3_gradcam(img_path, model, gradcam_output)
-
-            if not os.path.exists(gradcam_output):
-                print("❌ GradCAM failed!")
-                gradcam_url = None
+            if os.path.exists(gradcam_output):
+                gradcam_url = url_for('static', filename='uploads/' + gradcam_filename)
             else:
-                print("✅ GradCAM saved:", gradcam_output)
-                gradcam_url = url_for('static', filename='uploads/' + "gradcam_" + filename)
+                print("⚠️ GradCAM not ready, showing without heatmap")
+                gradcam_url = None
 
-            # ---------------- REPORT DATA ----------------
+            # -------- REPORT --------
             global latest_report_data
             latest_report_data = {
                 "disease": disease_name,
@@ -162,8 +151,6 @@ def detect():
                 "gradcam_image": gradcam_output if os.path.exists(gradcam_output) else img_path
             }
 
-            print("🎯 Rendering result page...")
-
             return render_template(
                 'result.html',
                 uploaded_image=url_for('static', filename='uploads/' + filename),
@@ -173,11 +160,10 @@ def detect():
                 treatment=treatment_details
             )
 
-        print("📄 GET request → loading detect page")
         return render_template('detect.html')
 
     except Exception as e:
-        print("🚨 ERROR OCCURRED:", str(e))
+        print("🚨 ERROR:", str(e))
         return f"Internal Error: {str(e)}"
 
 
