@@ -85,7 +85,9 @@ def detect():
             if not file or file.filename == '':
                 return "No file uploaded"
 
-            filename = secure_filename(file.filename)
+            # ✅ UNIQUE FILENAME (CRITICAL FIX)
+            filename = str(int(time.time())) + "_" + secure_filename(file.filename)
+
             img_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             file.save(img_path)
 
@@ -125,19 +127,11 @@ def detect():
                 target=run_gradcam,
                 args=(img_path, gradcam_output)
             )
+            thread.daemon = True   # ✅ prevent blocking
             thread.start()
 
-            # 🔥 WAIT SMALL TIME (NO NEW ROUTE)
-            wait_time = 0
-            while not os.path.exists(gradcam_output) and wait_time < 8:
-                time.sleep(1)
-                wait_time += 1
-
-            if os.path.exists(gradcam_output):
-                gradcam_url = url_for('static', filename='uploads/' + gradcam_filename)
-            else:
-                print("⚠️ GradCAM not ready, showing without heatmap")
-                gradcam_url = None
+            # ❌ REMOVED WAIT LOOP (CRITICAL FIX)
+            gradcam_url = url_for('static', filename='uploads/' + gradcam_filename)
 
             # -------- REPORT --------
             global latest_report_data
@@ -148,13 +142,13 @@ def detect():
                 "treatment": treatment_details['medical_treatment'],
                 "doctor_advice": treatment_details['doctor_advice'],
                 "uploaded_image": img_path,
-                "gradcam_image": gradcam_output if os.path.exists(gradcam_output) else img_path
+                "gradcam_image": gradcam_output
             }
 
             return render_template(
                 'result.html',
                 uploaded_image=url_for('static', filename='uploads/' + filename),
-                gradcam_image=gradcam_url,
+                gradcam_image=gradcam_url,   # may load slightly later
                 disease_name=disease_name,
                 confidence=confidence,
                 treatment=treatment_details
