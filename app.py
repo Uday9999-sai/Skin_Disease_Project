@@ -21,6 +21,9 @@ logging.getLogger("absl").setLevel(logging.ERROR)
 import tensorflow as tf
 tf.get_logger().setLevel('ERROR')
 
+
+tf.config.threading.set_intra_op_parallelism_threads(1)
+tf.config.threading.set_inter_op_parallelism_threads(1)
 # Disable GPU for stable inference
 try:
     tf.config.set_visible_devices([], 'GPU')
@@ -30,7 +33,7 @@ except:
 from flask import Flask, render_template, request, url_for
 from werkzeug.utils import secure_filename
 from treatment import get_treatment_recommendation
-from predictions import predict_skin_disease,resnet_model
+from predictions import predict_skin_disease
 from gradcam import generate_resnet50_gradcam
 
 class_names = {

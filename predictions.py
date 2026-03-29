@@ -3,22 +3,23 @@ import numpy as np
 import cv2
 import tensorflow as tf
 from tensorflow.keras import layers, Model
-from tensorflow.keras.applications.resnet50 import preprocess_input as res_preprocess
+from tensorflow.keras.applications.mobilenet_v3 import preprocess_input as mob_preprocess
+from tensorflow.keras.applications import MobileNetV3Large
 import urllib.request
 
-# ---------------- DOWNLOAD MODEL SAFELY ----------------
-MODEL_URL = "https://huggingface.co/udaychowdhary/skin-disease-model/resolve/main/CBAM_ResNet50_model_final.h5"
-MODEL_PATH = "res.h5"
+# ---------------- DOWNLOAD MODEL ----------------
+MODEL_URL = "https://huggingface.co/udaychowdhary/skin-disease-model/resolve/main/CBAM_mobilenetv3_model_final.h5"   # 🔥 replace with your MobileNet model
+MODEL_PATH = "mobile.h5"
 
 def download_model():
     try:
         if not os.path.exists(MODEL_PATH):
-            print("⬇️ Downloading model...")
+            print("⬇️ Downloading MobileNet model...")
             urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
             print("✅ Download complete")
 
         size = os.path.getsize(MODEL_PATH)
-        if size < 100_000_000:
+        if size < 10_000_000:   # adjust based on your model size (~17MB)
             print("❌ Corrupted model detected. Re-downloading...")
             os.remove(MODEL_PATH)
             urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
@@ -80,12 +81,9 @@ def cbam_block(x):
     x = spatial_attention(x)
     return x
 
-
 # ---------------- MODEL ----------------
-from tensorflow.keras.applications import ResNet50
-
-def build_resnet_cbam(num_classes):
-    base_model = ResNet50(
+def build_mobilenet_cbam(num_classes):
+    base_model = MobileNetV3Large(
         weights="imagenet",
         include_top=False,
         input_shape=(224, 224, 3)
@@ -97,20 +95,18 @@ def build_resnet_cbam(num_classes):
     x = cbam_block(x)
     x = layers.GlobalAveragePooling2D()(x)
     x = layers.BatchNormalization()(x)
-    x = layers.Dense(512, activation="relu")(x)
+    x = layers.Dense(256, activation="relu")(x)
     x = layers.Dropout(0.5)(x)
 
     output = layers.Dense(num_classes, activation="softmax")(x)
 
     return Model(base_model.input, output)
 
-
 # ---------------- LOAD MODEL ----------------
-print("🧠 Loading model...")
-resnet_model = build_resnet_cbam(num_classes)
-resnet_model.load_weights(MODEL_PATH)
+print("🧠 Loading MobileNet model...")
+mobilenet_model = build_mobilenet_cbam(num_classes)
+mobilenet_model.load_weights(MODEL_PATH)
 print("✅ Model loaded successfully")
-
 
 # ---------------- PREPROCESS ----------------
 def preprocess_image(img_path):
@@ -123,17 +119,16 @@ def preprocess_image(img_path):
     img = cv2.resize(img, (224, 224))
     img = img.astype("float32")
 
-    img = res_preprocess(img)
+    img = mob_preprocess(img)
     img = np.expand_dims(img, axis=0)
 
     return img
-
 
 # ---------------- PREDICTION ----------------
 def predict_skin_disease(img_path):
     img = preprocess_image(img_path)
 
-    preds = resnet_model.predict(img, verbose=0)
+    preds = mobilenet_model.predict(img, verbose=0)
 
     predicted_class = int(np.argmax(preds))
     confidence = float(np.max(preds) * 100)
