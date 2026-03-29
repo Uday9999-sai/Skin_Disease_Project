@@ -1,3 +1,5 @@
+import threading
+model_lock = threading.Lock()
 import os
 import numpy as np
 import cv2
