@@ -103,10 +103,18 @@ def build_mobilenet_cbam(num_classes):
     return Model(base_model.input, output)
 
 # ---------------- LOAD MODEL ----------------
-print("🧠 Loading MobileNet model...")
-mobilenet_model = build_mobilenet_cbam(num_classes)
-mobilenet_model.load_weights(MODEL_PATH)
-print("✅ Model loaded successfully")
+
+mobilenet_model = None
+
+def get_model():
+    global mobilenet_model
+    if mobilenet_model is None:
+        print("🧠 Loading model ONCE...")
+        model = build_mobilenet_cbam(num_classes)
+        model.load_weights(MODEL_PATH)
+        mobilenet_model = model
+        print("✅ Model loaded successfully")
+    return mobilenet_model
 
 # ---------------- PREPROCESS ----------------
 def preprocess_image(img_path):
@@ -126,9 +134,11 @@ def preprocess_image(img_path):
 
 # ---------------- PREDICTION ----------------
 def predict_skin_disease(img_path):
+    model = get_model()   # ✅ VERY IMPORTANT
+
     img = preprocess_image(img_path)
 
-    preds = mobilenet_model.predict(img, verbose=0)
+    preds = model.predict(img, verbose=0)
 
     predicted_class = int(np.argmax(preds))
     confidence = float(np.max(preds) * 100)
