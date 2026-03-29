@@ -62,10 +62,26 @@ latest_report_data = None
 # 🔥 BACKGROUND GRADCAM
 def run_gradcam(img_path, output_path):
     try:
+        print("🔥 GradCAM started:", img_path)
+
         generate_mobilenetv3_gradcam(img_path, model, output_path)
+
+        if not os.path.exists(output_path):
+            raise Exception("GradCAM not created")
+
         print("✅ GradCAM done")
+
     except Exception as e:
         print("🚨 GradCAM ERROR:", str(e))
+
+        # ✅ fallback image (VERY IMPORTANT)
+        try:
+            img = cv2.imread(img_path)
+            if img is not None:
+                cv2.imwrite(output_path, img)
+                print("⚠️ Fallback used")
+        except:
+            print("❌ Fallback failed")
 
 
 @app.route('/')

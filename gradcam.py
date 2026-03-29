@@ -5,6 +5,13 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.applications.mobilenet_v3 import preprocess_input
 
 
+import cv2
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.models import Model
+from tensorflow.keras.applications.mobilenet_v3 import preprocess_input
+
+
 def generate_mobilenetv3_gradcam(img_path, model, output_path):
 
     # -------------------------------------------------
@@ -25,13 +32,13 @@ def generate_mobilenetv3_gradcam(img_path, model, output_path):
     original_img = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
 
     # -------------------------------------------------
-    # 3. Preprocess (OPTIMIZED)
+    # 3. Preprocess
     # -------------------------------------------------
     img_resized = cv2.resize(original_img, (224, 224))
     img_array = preprocess_input(img_resized.astype(np.float32))[None, ...]
 
     # -------------------------------------------------
-    # 4. Auto layer selection (same logic)
+    # 4. Multi-layer selection (SAME LOGIC)
     # -------------------------------------------------
     layers = []
     for layer in reversed(model.layers):
@@ -41,63 +48,84 @@ def generate_mobilenetv3_gradcam(img_path, model, output_path):
             break
     layers = layers[::-1]
 
-    # -------------------------------------------------
-    # 5. Grad-CAM (OPTIMIZED MODEL CREATION)
-    # -------------------------------------------------
     heatmaps = []
     target_size = (224, 224)
 
+    # -------------------------------------------------
+    # 5. Grad-CAM per layer (SAFE VERSION)
+    # -------------------------------------------------
     for layer_name in layers:
 
-        # reuse model input (slightly faster)
-        grad_model = Model(
-            model.input,
-            [model.get_layer(layer_name).output, model.output]
-        )
+        try:
+            grad_model = Model(
+                model.input,
+                [model.get_layer(layer_name).output, model.output]
+            )
 
-        with tf.GradientTape() as tape:
-            conv_outputs, predictions = grad_model(img_array, training=False)
-            loss = predictions[:, tf.argmax(predictions[0])]
+            with tf.GradientTape() as tape:
+                conv_outputs, predictions = grad_model(img_array, training=False)
+                loss = predictions[:, tf.argmax(predictions[0])]
 
-        grads = tape.gradient(loss, conv_outputs)
-        pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+            grads = tape.gradient(loss, conv_outputs)
 
-        conv_outputs = conv_outputs[0]
+            # 🔥 SAFETY CHECK
+            if grads is None:
+                print(f"⚠️ Skipping layer {layer_name} (grads None)")
+                continue
 
-        heatmap = tf.reduce_sum(conv_outputs * pooled_grads, axis=-1)
+            pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+            conv_outputs = conv_outputs[0]
 
-        # Normalize (SAFE + FAST)
-        heatmap = tf.maximum(heatmap, 0)
-        heatmap /= (tf.reduce_max(heatmap) + 1e-8)
+            heatmap = tf.reduce_sum(conv_outputs * pooled_grads, axis=-1)
 
-        # Convert early to numpy
-        heatmap = heatmap.numpy()
+            heatmap = tf.maximum(heatmap, 0)
 
-        # Resize once here
-        heatmap = cv2.resize(heatmap, target_size)
+            max_val = tf.reduce_max(heatmap)
 
-        heatmaps.append(heatmap)
+            # 🔥 AVOID DIVIDE BY ZERO
+            if max_val == 0:
+                print(f"⚠️ Skipping layer {layer_name} (zero heatmap)")
+                continue
+
+            heatmap /= max_val
+            heatmap = heatmap.numpy()
+
+            # 🔥 REMOVE NaNs
+            heatmap = np.nan_to_num(heatmap)
+
+            heatmap = cv2.resize(heatmap, target_size)
+
+            heatmaps.append(heatmap)
+
+        except Exception as e:
+            print(f"🚨 Layer {layer_name} failed:", str(e))
+            continue
 
     # -------------------------------------------------
-    # 6. Combine (same logic)
+    # 6. Combine heatmaps (SAFE)
     # -------------------------------------------------
+    if len(heatmaps) == 0:
+        print("🚨 All layers failed → fallback")
+        cv2.imwrite(output_path, original_img)
+        return output_path
+
     heatmap = np.max(np.stack(heatmaps, axis=0), axis=0)
 
     # -------------------------------------------------
-    # 7. Noise removal (same logic, faster ops)
+    # 7. Noise removal
     # -------------------------------------------------
     heatmap = np.where(heatmap < 0.25, 0, heatmap)
     heatmap = cv2.GaussianBlur(heatmap, (5, 5), 0)
     heatmap = np.power(heatmap, 0.9)
 
     # -------------------------------------------------
-    # 8. Resize once
+    # 8. Resize to original
     # -------------------------------------------------
     h, w = original_img.shape[:2]
     heatmap = cv2.resize(heatmap, (w, h))
 
     # -------------------------------------------------
-    # 9. Mask (optimized)
+    # 9. Lesion mask
     # -------------------------------------------------
     gray = cv2.cvtColor(original_img, cv2.COLOR_BGR2GRAY)
 
@@ -116,7 +144,7 @@ def generate_mobilenetv3_gradcam(img_path, model, output_path):
     heatmap *= mask
 
     # -------------------------------------------------
-    # 10. Gap filling (same logic)
+    # 10. Fill gaps
     # -------------------------------------------------
     heatmap /= (np.max(heatmap) + 1e-8)
 
@@ -125,6 +153,9 @@ def generate_mobilenetv3_gradcam(img_path, model, output_path):
                        heatmap)
 
     heatmap = cv2.GaussianBlur(heatmap, (21, 21), 0)
+
+    # 🔥 FINAL SAFETY
+    heatmap = np.nan_to_num(heatmap)
 
     # -------------------------------------------------
     # 11. Convert to color
