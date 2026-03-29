@@ -542,7 +542,7 @@
       await animateProgress(progressBar, 0, 30);
       console.log("🚀 Sending request...");
 
-      const response = await fetch("/detect", {
+      const response = await fetch("https://skindiseaseproject-production.up.railway.app/detect", {
         method: "POST",
         body: formData,
       });
