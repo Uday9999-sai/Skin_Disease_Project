@@ -33,13 +33,19 @@ def generate_mobilenetv3_gradcam(img_path, model, output_path):
     img_array = np.expand_dims(img, axis=0)
 
     # -------------------------------------------------
-    # 4. Multi-layer selection
+    # 4. 🔥 AUTO LAYER SELECTION (FIX FOR RENDER)
     # -------------------------------------------------
-    layers = [
-        "expanded_conv_11_project",
-        "expanded_conv_13_project",
-        "expanded_conv_14_project"
-    ]
+    layers = []
+
+    for layer in reversed(model.layers):
+        if "project" in layer.name:
+            layers.append(layer.name)
+        if len(layers) == 3:
+            break
+
+    layers = layers[::-1]  # maintain order
+
+    print("Using GradCAM layers:", layers)
 
     heatmaps = []
     target_size = (224, 224)
@@ -74,13 +80,13 @@ def generate_mobilenetv3_gradcam(img_path, model, output_path):
         heatmap /= tf.reduce_max(heatmap) + 1e-8
         heatmap = heatmap.numpy()
 
-        # Resize (fix mismatch)
+        # Resize
         heatmap = cv2.resize(heatmap, target_size)
 
         heatmaps.append(heatmap)
 
     # -------------------------------------------------
-    # 6. Combine heatmaps (MAX = best)
+    # 6. Combine heatmaps
     # -------------------------------------------------
     heatmap = np.max(np.array(heatmaps), axis=0)
 
@@ -144,7 +150,7 @@ def generate_mobilenetv3_gradcam(img_path, model, output_path):
     result = cv2.addWeighted(original_img, 0.7, heatmap_color, 0.3, 0)
 
     # -------------------------------------------------
-    # ✅ 13. SAVE OUTPUT (ONLY ADDITION)
+    # 13. Save output
     # -------------------------------------------------
     cv2.imwrite(output_path, result)
 
