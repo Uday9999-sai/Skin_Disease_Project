@@ -540,8 +540,9 @@
 
     try {
       await animateProgress(progressBar, 0, 30);
+      console.log("🚀 Sending request...");
 
-      const response = await fetch("/detect", {
+      const response = await fetch("https://skin-disease-project-sbnn.onrender.com/detect", {
         method: "POST",
         body: formData,
       });
