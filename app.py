@@ -85,7 +85,7 @@ def detect():
             if not file or file.filename == '':
                 return "No file uploaded"
 
-            # ✅ UNIQUE FILENAME (CRITICAL FIX)
+            # ✅ UNIQUE FILENAME
             filename = str(int(time.time())) + "_" + secure_filename(file.filename)
 
             img_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
@@ -127,11 +127,19 @@ def detect():
                 target=run_gradcam,
                 args=(img_path, gradcam_output)
             )
-            thread.daemon = True   # ✅ prevent blocking
+            thread.daemon = True
             thread.start()
 
-            # ❌ REMOVED WAIT LOOP (CRITICAL FIX)
-            gradcam_url = url_for('static', filename='uploads/' + gradcam_filename)
+            # ✅ SMALL SAFE WAIT (MAX 2 SEC)
+            wait_time = 0
+            while not os.path.exists(gradcam_output) and wait_time < 2:
+                time.sleep(0.5)
+                wait_time += 0.5
+
+            if os.path.exists(gradcam_output):
+                gradcam_url = url_for('static', filename='uploads/' + gradcam_filename)
+            else:
+                gradcam_url = None   # will show later if frontend refresh
 
             # -------- REPORT --------
             global latest_report_data
@@ -148,7 +156,7 @@ def detect():
             return render_template(
                 'result.html',
                 uploaded_image=url_for('static', filename='uploads/' + filename),
-                gradcam_image=gradcam_url,   # may load slightly later
+                gradcam_image=gradcam_url,
                 disease_name=disease_name,
                 confidence=confidence,
                 treatment=treatment_details

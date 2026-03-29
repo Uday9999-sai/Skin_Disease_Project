@@ -193,10 +193,25 @@ nav a{
 </div>
 
 <div class="image-card">
-<h3>Grad-CAM Visualization</h3>
-<img src="{{ gradcam_image }}">
+    <h3>Grad-CAM Visualization</h3>
+
+    {% if gradcam_image %}
+        <img id="gradcam" src="{{ gradcam_image }}">
+    {% else %}
+        <p>Generating Grad-CAM...</p>
+        <img id="gradcam" style="display:none;">
+    {% endif %}
 </div>
-</div>
+
+<script>
+setInterval(() => {
+    const img = document.getElementById("gradcam");
+    if (img) {
+        img.src = "{{ gradcam_image }}?t=" + new Date().getTime();
+        img.style.display = "block";
+    }
+}, 2000);
+</script>
 
 <div class="prediction-card">
 <h2>Prediction Details</h2>
