@@ -34,7 +34,7 @@ from flask import Flask, render_template, request, url_for
 from werkzeug.utils import secure_filename
 from treatment import get_treatment_recommendation
 from predictions import predict_skin_disease
-from gradcam import generate_gradcam
+from gradcam import generate_mobilenetv3_gradcam
 from predictions import get_model
 
 class_names = {
@@ -141,7 +141,7 @@ def detect():
 
             gradcam_output = os.path.join("static/uploads", "gradcam_" + filename)
 
-            generate_gradcam(img_path, model, gradcam_output)
+            generate_mobilenetv3_gradcam(img_path, model, gradcam_output)
 
             if not os.path.exists(gradcam_output):
                 print("❌ GradCAM failed!")
