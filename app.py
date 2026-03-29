@@ -34,7 +34,8 @@ from flask import Flask, render_template, request, url_for
 from werkzeug.utils import secure_filename
 from treatment import get_treatment_recommendation
 from predictions import predict_skin_disease
-from gradcam import generate_resnet50_gradcam
+from gradcam import generate_gradcam
+from predictions import get_model
 
 class_names = {
     0: "Actinic Keratosis",
@@ -135,12 +136,15 @@ def detect():
 
             # ---------------- GRADCAM ----------------
             print("🔥 Generating GradCAM...")
+
+            model = get_model()   # 🔥 IMPORTANT
+
             gradcam_output = os.path.join("static/uploads", "gradcam_" + filename)
 
-            #generate_resnet50_gradcam(img_path, resnet_model, gradcam_output)
+            generate_gradcam(img_path, model, gradcam_output)
 
             if not os.path.exists(gradcam_output):
-                print("❌ GradCAM not generated!")
+                print("❌ GradCAM failed!")
                 gradcam_url = None
             else:
                 print("✅ GradCAM saved:", gradcam_output)
@@ -155,7 +159,7 @@ def detect():
                 "treatment": treatment_details['medical_treatment'],
                 "doctor_advice": treatment_details['doctor_advice'],
                 "uploaded_image": img_path,
-                "gradcam_image": gradcam_output
+                "gradcam_image": gradcam_output if os.path.exists(gradcam_output) else img_path
             }
 
             print("🎯 Rendering result page...")

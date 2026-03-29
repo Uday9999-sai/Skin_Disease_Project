@@ -2,11 +2,11 @@ import cv2
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.models import Model
-from tensorflow.keras.applications.resnet50 import preprocess_input
+from tensorflow.keras.applications.mobilenet_v3 import preprocess_input
 
 
-def generate_resnet50_gradcam(img_path, model, output_path):
-    
+def generate_gradcam(img_path, model, output_path):
+
     # -------------------------------------------------
     # 1. Load image
     # -------------------------------------------------
@@ -17,16 +17,16 @@ def generate_resnet50_gradcam(img_path, model, output_path):
     original_img = img.copy()
 
     # -------------------------------------------------
-    # 2. Remove illumination bias (important for dermoscopy)
+    # 2. Illumination correction (keep this 👍)
     # -------------------------------------------------
     lab = cv2.cvtColor(original_img, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
     l = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8)).apply(l)
-    lab = cv2.merge((l,a,b))
+    lab = cv2.merge((l, a, b))
     original_img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
     # -------------------------------------------------
-    # 3. Preprocess EXACTLY like ResNet training
+    # 3. Preprocess (MobileNet)
     # -------------------------------------------------
     img = cv2.resize(original_img, (224, 224))
     img = img.astype("float32")
@@ -34,24 +34,24 @@ def generate_resnet50_gradcam(img_path, model, output_path):
     img_array = np.expand_dims(img, axis=0)
 
     # -------------------------------------------------
-    # 4. Get CBAM feature map (layer before GAP)
+    # 4. Find last Conv layer (MobileNet safe)
     # -------------------------------------------------
-    cbam_layer = None
+    last_conv_layer = None
     for layer in reversed(model.layers):
-        if isinstance(layer, tf.keras.layers.GlobalAveragePooling2D):
-            cbam_layer = model.layers[model.layers.index(layer) - 1].name
+        if isinstance(layer, tf.keras.layers.Conv2D):
+            last_conv_layer = layer.name
             break
 
-    if cbam_layer is None:
-        raise ValueError("CBAM feature layer not found")
+    if last_conv_layer is None:
+        raise ValueError("No Conv layer found for GradCAM")
 
     # -------------------------------------------------
-    # 5. Create GradCAM++ model
+    # 5. Create GradCAM model
     # -------------------------------------------------
     grad_model = Model(
         inputs=model.inputs,
         outputs=[
-            model.get_layer(cbam_layer).output,
+            model.get_layer(last_conv_layer).output,
             model.output
         ]
     )
@@ -72,13 +72,13 @@ def generate_resnet50_gradcam(img_path, model, output_path):
     grads_power_2 = grads ** 2
     grads_power_3 = grads ** 3
 
-    sum_grads = tf.reduce_sum(feature_maps * grads_power_3, axis=(0,1))
+    sum_grads = tf.reduce_sum(feature_maps * grads_power_3, axis=(0, 1))
 
     eps = 1e-8
     alpha = grads_power_2 / (2 * grads_power_2 + sum_grads + eps)
 
     positive_gradients = tf.nn.relu(grads)
-    weights = tf.reduce_sum(alpha * positive_gradients, axis=(0,1))
+    weights = tf.reduce_sum(alpha * positive_gradients, axis=(0, 1))
 
     heatmap = tf.reduce_sum(weights * feature_maps, axis=-1)
 
@@ -87,12 +87,12 @@ def generate_resnet50_gradcam(img_path, model, output_path):
     heatmap = heatmap.numpy()
 
     # -------------------------------------------------
-    # 7. Remove weak activations (important)
+    # 7. Remove weak activations (tune if needed)
     # -------------------------------------------------
-    heatmap[heatmap < 0.35] = 0
+    heatmap[heatmap < 0.3] = 0
 
     # -------------------------------------------------
-    # 8. Resize heatmap to original image
+    # 8. Resize to original
     # -------------------------------------------------
     heatmap = cv2.resize(heatmap, (original_img.shape[1], original_img.shape[0]))
     heatmap = np.uint8(255 * heatmap)
